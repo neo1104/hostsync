@@ -47,8 +47,6 @@ def hostsync_root_watcher(event):
             if (len(value) >= 0):
                 update_hosts(node, str_to_list(value.decode('utf-8')))
 
-    print(child_nodes)
-
 @zk.add_listener
 def zk_listener(state):
     if state == KazooState.LOST:

@@ -34,7 +34,6 @@ def update_hosts(host, value, mode='update'):
             hostsync_block.append(HostsyncConfigure.HOSTS_FILE_END)
 
     fs.close()
-    print('\n'.join(hostsync_block))
     fs = open(HostsyncConfigure.HOST_FILE_PATH, mode='w')
     fs.write('\n'.join(hostsync_block))
     fs.close()
