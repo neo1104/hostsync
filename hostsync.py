@@ -5,7 +5,6 @@ from kazoo.protocol.states import KeeperState
 from kazoo.protocol.states import WatchedEvent
 from configure import HostsyncConfigure
 from daemon import begin_daemon
-import watcher
 from update_hosts import update_hosts
 import sys, time, os, signal
 import logging
@@ -133,7 +132,6 @@ def hostsync_push():
                 host[ip].append(l[i])
             hosts.append(host)
     fs.close()
-    print(hosts)
     zoo_push_hosts(hosts)
 
 
@@ -177,6 +175,7 @@ def hostsync_daemon():
         if HOSTSYNC_QUIT:
             zk.stop()
             zk.close()
+            os.remove(HostsyncConfigure.PID_PATH)
             exit(0)
         elif HOSTSYNC_STATUS != 'CONNECTED':
             if zk.state == KazooState.CONNECTED:
