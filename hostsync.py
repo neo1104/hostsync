@@ -7,10 +7,20 @@ from configure import HostsyncConfigure
 from daemon import begin_daemon
 import watcher
 from update_hosts import update_hosts
-import sys, time
+import sys, time, os, signal
+import logging
 
 zk = KazooClient(hosts=HostsyncConfigure.ZOO_SERVER)
 child_nodes = []
+
+HOSTSYNC_QUIT = False
+HOSTSYNC_STATUS = 'CONNECTED'
+
+def sigquit_handler(signum, frame):
+    global HOSTSYNC_QUIT
+    logger = logging.getLogger(__name__)
+    HOSTSYNC_QUIT = True
+    logger.debug("set HOSTSYNC_QUIT to %s", HOSTSYNC_QUIT)
 
 def str_to_list(s):
     l = []
@@ -20,7 +30,8 @@ def str_to_list(s):
     return l
 
 def hostsync_node_watcher(event):
-    print(event)
+    logger = logging.getLogger(__name__)
+    logger.info("receive %s node's %s event", event.path, event.type)
     node = event.path[len(HostsyncConfigure.HOSTS_LIST_NODE + '/'):len(event.path)]
     if event.type == EventType.DELETED:
         child_nodes.remove(node)
@@ -37,24 +48,31 @@ def hostsync_node_watcher(event):
 
 def hostsync_root_watcher(event):
     # get node list and re register watcher
-    print(event)
+    logger = logging.getLogger(__name__)
+    logger.info("receive %s node's %s event 1", event.path, event.type)
     nodes = zk.get_children(HostsyncConfigure.HOSTS_LIST_NODE, watch=hostsync_root_watcher)
+    logger.info("receive %s node's %s event 2", event.path, event.type)
     for node in nodes:
         if node not in child_nodes:
             child_nodes.append(node)
             # register watch for new created node
             (value, state) = zk.get(event.path + '/' + node, watch=hostsync_node_watcher)
+            logger.info("append new node:%s, value:%s", node, value)
             if (len(value) >= 0):
                 update_hosts(node, str_to_list(value.decode('utf-8')))
 
 @zk.add_listener
 def zk_listener(state):
+    global HOSTSYNC_STATUS
+    logger = logging.getLogger(__name__)
     if state == KazooState.LOST:
-        pass
+        logger.info("zookeeper connection LOST:[%s]", state)
+        HOSTSYNC_STATUS = 'LOST'
     elif state == KazooState.SUSPENDED:
-        pass
+        logger.info("zookeeper connection SUSPENDED:[%s]", state)
+        HOSTSYNC_STATUS = 'SUSPENDED'
     else:
-        pass
+        logger.info("zookeeper connection CONNECTED:[%s]", state)
 
 def hostsync_show():
     if len(sys.argv) != 2:
@@ -79,15 +97,7 @@ def zoo_push_hosts(hosts):
             if ip not in zoo_hosts:
                 zk.create(node_path, value=str(host[ip]).encode('utf-8'))
             else:
-                (value, state) = zk.get(node_path)
-                s = str_to_list(value.decode('utf-8'))
-                update = False
-                for i in host[ip]:
-                    if i not in s:
-                        update = True
-                        s.append(i)
-                if update:
-                    zk.set(node_path, str(s).encode('utf-8'))
+                zk.set(node_path, str(host[ip]).encode('utf-8'))
     print("hostsync: push down")
     zk.stop()
 
@@ -123,6 +133,7 @@ def hostsync_push():
                 host[ip].append(l[i])
             hosts.append(host)
     fs.close()
+    print(hosts)
     zoo_push_hosts(hosts)
 
 
@@ -137,12 +148,41 @@ COMMANDS:
           ''')
     exit(0)
 
+def hostsync_quit():
+    fs = open(HostsyncConfigure.PID_PATH, 'r')
+    pid = int(fs.readline())
+    fs.close()
+    os.kill(pid, signal.SIGQUIT)
+
 def hostsync_daemon():
-    #begin_daemon()
+    global HOSTSYNC_STATUS
+    if HostsyncConfigure.IS_DAEMON:
+        if os.path.exists(HostsyncConfigure.PID_PATH):
+            print("%s exists" % HostsyncConfigure.PID_PATH)
+            return;
+        begin_daemon()
+        logging.basicConfig(filename=HostsyncConfigure.LOG_PATH, level=HostsyncConfigure.LOG_LEVEL, format=HostsyncConfigure.LOG_FORMATER)
+        # set signal handler
+        signal.signal(signal.SIGQUIT, sigquit_handler)
+    else:
+        logging.basicConfig(level=HostsyncConfigure.LOG_LEVEL, format=HostsyncConfigure.LOG_FORMATER)
+    logger = logging.getLogger(__name__)
+    logger.info('Connected Zookeeper Server %s', HostsyncConfigure.ZOO_SERVER)
     zk.start()
+    logger.info('Get Children of %s', HostsyncConfigure.HOSTS_LIST_NODE)
     hostsync_root_watcher(WatchedEvent(type=EventType.CHILD, state=KeeperState.CONNECTED, path=HostsyncConfigure.HOSTS_LIST_NODE))
     while True:
         time.sleep(1)
+        #logger.debug('time alarm, HOSTSYNC_QUIT:%s', HOSTSYNC_QUIT)
+        if HOSTSYNC_QUIT:
+            zk.stop()
+            zk.close()
+            exit(0)
+        elif HOSTSYNC_STATUS != 'CONNECTED':
+            if zk.state == KazooState.CONNECTED:
+                child_nodes.clear()
+                hostsync_root_watcher(WatchedEvent(type=EventType.CHILD, state=KeeperState.CONNECTED, path=HostsyncConfigure.HOSTS_LIST_NODE))
+                HOSTSYNC_STATUS = 'CONNECTED'
 
 
 commands = [
@@ -157,6 +197,11 @@ commands = [
             {
                 'command': 'show',
                 'proc': hostsync_show
+            },
+            {
+                'command': 'quit',
+                'proc': hostsync_quit
+
             },
             {
                 'command': 'daemon',
