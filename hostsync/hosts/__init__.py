@@ -1,4 +1,4 @@
-from configure import HostsyncConfigure
+from hostsync.configure import HostsyncConfigure
 import logging
 
 def update_hosts(host, value, mode='update'):
