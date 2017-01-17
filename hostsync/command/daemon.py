@@ -22,6 +22,7 @@ def daemon():
     logger = logging.getLogger(__name__)
     logger.info('Connected Zookeeper Server %s', HostsyncConfigure.ZOO_SERVER)
     zk.start()
+    zk.ensure_path(HostsyncConfigure.HOSTS_LIST_NODE)
     logger.info('Get Children of %s', HostsyncConfigure.HOSTS_LIST_NODE)
     watcher.hostsync_root_watcher(WatchedEvent(type=EventType.CHILD, state=KeeperState.CONNECTED, path=HostsyncConfigure.HOSTS_LIST_NODE))
 
